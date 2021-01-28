@@ -30,4 +30,10 @@ We also save the model results for real and simulated data in our paper in ./res
 
 If you use this code please cite the paper:
 
-Zhou, D., Wei, X. Learning identifiable and interpretable latent models of high-dimensional neural activity using pi-VAE. NeurIPS 2020.
+Zhou, D., Wei, X. Learning identifiable and interpretable latent models of high-dimensional neural activity using pi-VAE. NeurIPS 2020. https://arxiv.org/abs/2011.04798
+
+## Data sources
+
+1. AD Grosmark, JD Long, and G Buzsáki. Recordings from hippocampal area ca1, pre, during and post novel spatial learning. crcns. org, 2016. doi:10.6080/K0862DC5. (http://crcns.org/data-sets/hc/hc-11)
+
+2. Andres D Grosmark and György Buzsáki. Diversity in neural firing dynamics supports both rigid and learned hippocampal sequences. Science, 351(6280):1440–1443, 2016.

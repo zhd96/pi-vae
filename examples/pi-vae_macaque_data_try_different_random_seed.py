@@ -90,3 +90,11 @@ s_n = vae.fit_generator(custom_data_generator(x_train, u_train),
               validation_data = custom_data_generator(x_valid, u_valid),
               validation_steps = len(x_valid), callbacks=[mcp]);
 
+vae.load_weights(model_chk_path);
+np.random.seed(666)
+tf.random.set_random_seed(666)
+elbo_samples = np.zeros(100)
+for sample in range(len(elbo_samples)):
+    elbo_samples[sample] = vae.evaluate_generator(custom_data_generator(x_all[:22], u_all[:22]), steps = len(x_all[:22]))
+
+np.save('../results/macaque_4d_'+str(seed_use)+'_pivae_elbo_samples.npy', elbo_samples)
