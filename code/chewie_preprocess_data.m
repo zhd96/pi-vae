@@ -1,10 +1,12 @@
 %% matlab script
-trials = data.trials(:,[1:3,5:7,9]);
+% TODO: can save all the variables in one .mat file
+
+trials = data.trials(:,[1:3,5:7,9]); % These info are: trial id, start time, end time, target on time, go cue time, direction id, direction angles
 trials_array = table2array(trials);
 save('Chewie_20161006_trials_array.mat', 'trials_array');
 
-nNeuron = 255;
-nTrial = 251;
+nNeuron = size(data.units, 2);
+nTrial = size(trials_array, 1);
 
 spike_array = {};
 for ii = 1:nNeuron
@@ -20,7 +22,7 @@ bin_siz = 50/1000;
 seq=[];
 for tr=1:nTrial,
     t_start_drop = trials_array(tr,5);
-    t_end_drop = trials_array(tr,2);
+    t_end_drop = trials_array(tr,3);
     bin_edge = (t_start_drop):bin_siz:(t_end_drop);
     nBin = length(bin_edge) - 1;
     spike_bin_temp = zeros(nNeuron, nBin);
