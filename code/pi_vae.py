@@ -171,7 +171,8 @@ def decode_func(z_input, gen_nodes, dim_x, mdl):
 
 ## encoder
 def encode_func(x_input, gen_nodes, dim_z): 
-    """Define mean or log of variance of q(z|x).
+    """Define mean or log of variance of q(z|x). TODO: Make mean and log variance of q(z|x) share the same hidden layers in encoder (to save parameters). 
+    Refer to z_prior_nn function below to see how to make this change.
     
     # Arguments
         x_input: observations x
