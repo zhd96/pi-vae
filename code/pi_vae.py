@@ -10,7 +10,7 @@ from keras import losses
 from keras.layers.core import Lambda
 from keras import backend as K
 from keras.callbacks import ModelCheckpoint
-from keras.activations import softplus
+from keras.activations import softplus, sigmoid
 import numpy as np
 from keras.callbacks import LearningRateScheduler
 
@@ -29,16 +29,21 @@ def perm_func(x, ind):
     return tf.gather(x, indices=ind, axis=-1);
 
 squeeze_func = Lambda(lambda x: K.squeeze(x, 1));
+softplus_func = Lambda(lambda x: softplus(x));
+sigmoid_func = Lambda(lambda x: sigmoid(x));
+clip_func = Lambda(lambda x: K.clip(x, min_value=1e-7, max_value=1e7));
+clip_func2 = Lambda(lambda x: K.clip(x, min_value=1e-7, max_value=1-1e-7));
 
 ############# Section II: define encoders and decoders #############
 ## The following three functions define GIN volume preserving flow
-def first_nflow_layer(z_input, dim_x):
+def first_nflow_layer(z_input, dim_x, min_gen_nodes=30):
     """Define the first layer in GIN flow, which maps z to the cancatenation of z and t(z), t is parameterized by NN. 
     This is equivalent to GIN model with input as z1:dim_z padding dim_x - dim_z zeros.
     
     # Arguments
         z_input: latents z
         dim_x: dimension of observations x
+        min_gen_nodes: use max(min_gen_nodes, dim_x//4) in the hidden layer of first_nflow_layer. 
         
     # Important hyperparameters to adjust:
         gen_nodes: (integer) number of node used in each hidden layer
@@ -47,7 +52,7 @@ def first_nflow_layer(z_input, dim_x):
     # Returns
         output (tensor): output of the first layer in GIN flow.
     """
-    gen_nodes = dim_x//4;
+    gen_nodes = max(min_gen_nodes, dim_x//4);
     dim_z = z_input.shape.as_list()[-1];
     n_nodes = [gen_nodes, gen_nodes, dim_x-dim_z];
     act_func = ['relu', 'relu', 'linear'];
@@ -60,11 +65,12 @@ def first_nflow_layer(z_input, dim_x):
     output = layers.concatenate([z_input, output], axis=-1);
     return output
 
-def affine_coupling_layer(layer_input, dd=None):
+def affine_coupling_layer(layer_input, min_gen_nodes=30, dd=None):
     """Define each affine_coupling_layer, which maps input x to [x_{1:dd}, x_{dd+1:n} * exp(s(x_{1:dd})) + t(x_{1:dd})].
     
     # Arguments
         layer_input: input of affine_coupling_layer.
+        min_gen_nodes: use max(min_gen_nodes, dim_x//4) in the hidden layer of affine_coupling_layer.
         dd: dimension of input which keeps the same after applying this layer. Default is None, which will set dd as half of the layer_input dimension if the input dimension is an even number, or set dd as the closest integer if the input dimension is an odd number.
         
     # Important hyperparameters to adjust:
@@ -88,7 +94,7 @@ def affine_coupling_layer(layer_input, dd=None):
     x_input2 = Lambda(slice_func, arguments={'start':dd,'size':DD-dd})(layer_input);
     st_output = x_input1;
     
-    n_nodes = [DD//4, DD//4, 2*(DD-dd)-1];
+    n_nodes = [max(min_gen_nodes, DD//4), max(min_gen_nodes, DD//4), 2*(DD-dd)-1];
     act_func = ['relu', 'relu', 'linear'];
     for ii in range(3):
         st_output = layers.Dense(n_nodes[ii], activation = act_func[ii])(st_output);
@@ -102,19 +108,19 @@ def affine_coupling_layer(layer_input, dd=None):
     output = layers.concatenate([trans_x, x_input1], axis=-1);
     return output
 
-def affine_coupling_block(x_output, dd=None):
+def affine_coupling_block(x_output, min_gen_nodes=30, dd=None):
     """Define affine_coupling_block, which contains two affine_coupling_layer.
     
     # Returns
         output (tensor): output of a GIN block (affine_coupling_block).
     """
     for _ in range(2):
-        x_output = affine_coupling_layer(x_output, dd);
+        x_output = affine_coupling_layer(x_output, min_gen_nodes, dd);
     return x_output
 
 ## decoder
 ## decoder using GIN flow, used in our paper
-def decode_nflow_func(z_input, n_blk, dim_x, mdl, dd=None):
+def decode_nflow_func(z_input, n_blk, dim_x, mdl, min_gen_nodes=30, dd=None):
     """Define mean(p(x|z)) using GIN volume preserving flow.
     
     # Arguments
@@ -122,11 +128,13 @@ def decode_nflow_func(z_input, n_blk, dim_x, mdl, dd=None):
         n_blk: number of affine_coupling_block used in normalizing flow
         dim_x: dimension of observations x
         mdl: observation model. If 'poisson', add a softplus transformation to the output; if 'gaussian', directly return output.
+        min_gen_nodes: use max(min_gen_nodes, dim_x//4) in the hidden layer of affine_coupling_layer. 
         dd: dimension which keeps the same after applying affine_coupling_layer. Check affine_coupling_layer function for more details. Default is None, will set it in affine_coupling_layer function.
         
     # Important hyperparameters to adjust:
         n_blk
         dd
+        hyperparameters in affine_coupling_layer, e.g. number of nodes in hidden layer of affine_coupling_layer
         
     # Returns
         output (tensor): output of the decoder network, i.e. mean(p(x|z)).
@@ -139,16 +147,15 @@ def decode_nflow_func(z_input, n_blk, dim_x, mdl, dd=None):
         permute_ind.append(tf.convert_to_tensor(np.random.permutation(dim_x)));
     
     ## Get output through first_nflow_layer 
-    output = first_nflow_layer(z_input, dim_x);
+    output = first_nflow_layer(z_input, dim_x, min_gen_nodes);
     
     ## First permute the input before passing it to each GIN block (affine_coupling_block). Repeat this procedure n_blk times.
     for ii in range(n_blk):
         output = Lambda(perm_func, arguments={'ind':permute_ind[ii]})(output);
-        output = affine_coupling_block(output, dd);
+        output = affine_coupling_block(output, min_gen_nodes, dd);
     
     ## Get the final output, if 'poisson' observation, the output is the firing rate as a function of z_input; if 'gaussian' observation, the output is the mean of gaussian as a function of z_input.
     if mdl == 'poisson':
-        softplus_func = Lambda(lambda x: softplus(x));
         output = softplus_func(output)
         
     return output
@@ -279,7 +286,7 @@ def compute_posterior(args):
     return [post_mean, post_log_var]
 
 ############# Section III: define pi-vae model #############
-def vae_mdl(dim_x, dim_z, dim_u, gen_nodes, n_blk=None, mdl='poisson', disc=True, learning_rate=5e-4):
+def vae_mdl(dim_x, dim_z, dim_u, gen_nodes, n_blk=None, min_gen_nodes_decoder_nflow=30, mdl='poisson', disc=True, learning_rate=5e-4):
     """Define pi-vae model.
     
     # Arguments
@@ -288,12 +295,15 @@ def vae_mdl(dim_x, dim_z, dim_u, gen_nodes, n_blk=None, mdl='poisson', disc=True
         dim_u: dimension of input labels u.
         gen_nodes: number of nodes in the hidden layer of encoder (which maps x to z).
         n_blk: number of flow blocks used in the decoder (which maps z to x).
+        min_gen_nodes_decoder_nflow: use max(min_gen_nodes_decoder_nflow, dim_x//4) in the hidden layer of normalizing flow decoder (which maps z to x).
         mdl: type of observations. Currently support 'poisson' and 'gaussian'.
         disc: Boolean. Whether the input labels are discrete (True) or continuous (False).
         learning_rate: learning_rate used to optimze the loss function of the pi-vae model.
         
     # Returns
         vae: (tensorflow model) the pi-vae model.
+        
+    ## TODO: save the output of vae model as a dict.
     """
     ### discrete u, or continuous u (one-hot) as input
 
@@ -319,11 +329,10 @@ def vae_mdl(dim_x, dim_z, dim_u, gen_nodes, n_blk=None, mdl='poisson', disc=True
 
     ### define decoder model
     if n_blk is not None: # use nflow
-        fire_rate = decode_nflow_func(z_input, n_blk, dim_x, mdl);
+        fire_rate = decode_nflow_func(z_input, n_blk, dim_x, mdl, min_gen_nodes=min_gen_nodes_decoder_nflow);
     else: # this else part has been deprecated 
         fire_rate = decode_func(z_input, gen_nodes, dim_x, mdl);
     if mdl == 'poisson': # clip the value of fire_rate to make it more numerically stable.
-        clip_func = Lambda(lambda x: K.clip(x, min_value=1e-7, max_value=1e7));
         fire_rate = clip_func(fire_rate);
     
     decoder = Model(inputs = [z_input], outputs = [fire_rate], name='decoder')
@@ -335,7 +344,6 @@ def vae_mdl(dim_x, dim_z, dim_u, gen_nodes, n_blk=None, mdl='poisson', disc=True
         # if gaussian observation, set the observation noise level as different real numbers and optimize it in loss function.
         one_tensor = layers.Input(tensor=(tf.ones((1,1))))
         obs_log_var = layers.Dense(dim_x, activation='linear', use_bias=False, name='obs_noise')(one_tensor);
-        #obs_log_var = clip_func(obs_log_var);
         vae = Model(inputs = [x_input, u_input, one_tensor], outputs = [post_mean, post_log_var, z_sample,fire_rate, lam_mean, lam_log_var, z_mean, z_log_var, obs_log_var], name='vae')
     elif mdl == 'poisson':
         vae = Model(inputs = [x_input, u_input], outputs = [post_mean, post_log_var, z_sample,fire_rate, lam_mean, lam_log_var, z_mean, z_log_var], name='vae')
